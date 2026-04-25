@@ -1,2 +1,7 @@
 *.csv 
-raw_images/
+**/*.jpg
+**/*.jpeg
+**/*.png
+**/*.gif
+**/*.webp
+**/*.svg

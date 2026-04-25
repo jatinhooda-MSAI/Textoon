@@ -8,6 +8,7 @@ Usage:
     python scraper.py --num_images 10000 --output_dir ./raw_images --workers 8
 """
 
+import hashlib
 import os
 import csv
 import time
@@ -110,6 +111,10 @@ EXCLUDED_TAGS = [
 
 SAFEBOORU_API = "https://safebooru.org/index.php"
 
+def append_row(metadata_path, fieldnames, row):
+    with open(metadata_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writerow(row)
 
 def fetch_page(page: int, tags: str, limit: int = 1000) -> list:
     """
@@ -157,7 +162,7 @@ def extract_attributes(tag_string: str) -> dict:
     return attributes
 
 
-def has_minimum_attributes(attributes: dict, min_attrs: int = 3) -> bool:
+def has_minimum_attributes(attributes: dict, min_attrs: int = 5) -> bool:
     """Check that an image has at least `min_attrs` known attributes."""
     return sum(attributes.values()) >= min_attrs
 
@@ -182,6 +187,9 @@ def download_single_image(post: dict, output_path: Path) -> dict | None:
     try:
         resp = requests.get(image_url, timeout=30)
         resp.raise_for_status()
+        img_bytes = resp.content
+        img_hash = hashlib.md5(img_bytes).hexdigest()
+
         img = Image.open(BytesIO(resp.content))
         
         # Quality filters
@@ -197,7 +205,7 @@ def download_single_image(post: dict, output_path: Path) -> dict | None:
         
         # Build row
         attributes = extract_attributes(tag_string)
-        if not has_minimum_attributes(attributes, min_attrs=3):
+        if not has_minimum_attributes(attributes, min_attrs=5):
             # Clean up saved file
             save_path.unlink(missing_ok=True)
             return None
@@ -207,6 +215,8 @@ def download_single_image(post: dict, output_path: Path) -> dict | None:
             "safebooru_id": post_id,
             "original_width": w,
             "original_height": h,
+            "image_md5": img_hash,
+            "raw_tags": tag_string
         }
         row.update(attributes)
         return row
@@ -243,6 +253,14 @@ def scrape(num_images: int, output_dir: str, delay: float = 1.0, workers: int = 
     existing_ids = set()
     if metadata_path.exists():
         with open(metadata_path, "r") as f:
+            existing_header = f.readline().strip().split(",")
+            if existing_header != fieldnames:
+                raise RuntimeError(
+                    f"Schema mismatch. Header has {len(existing_header)} cols, "
+                    f"code expects {len(fieldnames)}. Delete metadata.csv to rebuild."
+                )
+            
+        with open(metadata_path, "r") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 existing_ids.add(row["safebooru_id"])
@@ -250,9 +268,9 @@ def scrape(num_images: int, output_dir: str, delay: float = 1.0, workers: int = 
         csv_file = open(metadata_path, "a", newline="")
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
     else:
-        csv_file = open(metadata_path, "w", newline="")
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-        writer.writeheader()
+        with open(metadata_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
     
     # Thread-safe CSV writing
     csv_lock = threading.Lock()
@@ -288,7 +306,7 @@ def scrape(num_images: int, output_dir: str, delay: float = 1.0, workers: int = 
                     # Pre-check attributes before downloading
                     tag_string = post.get("tags", "")
                     attributes = extract_attributes(tag_string)
-                    if has_minimum_attributes(attributes, min_attrs=3):
+                    if has_minimum_attributes(attributes, min_attrs=5):
                         new_posts.append(post)
                         existing_ids.add(post_id)  # Reserve ID
             
@@ -310,8 +328,7 @@ def scrape(num_images: int, output_dir: str, delay: float = 1.0, workers: int = 
                     row = future.result()
                     if row is not None:
                         with csv_lock:
-                            writer.writerow(row)
-                            csv_file.flush()
+                            append_row(metadata_path, fieldnames, row)
                         downloaded += 1
                         pbar.update(1)
                         
