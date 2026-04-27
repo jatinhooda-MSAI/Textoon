@@ -242,7 +242,7 @@ def scrape(num_images: int, output_dir: str, delay: float = 1.0, workers: int = 
     print(f"Tracking {len(ALL_ATTRIBUTE_TAGS)} attributes across {len(ATTRIBUTE_TAGS)} categories\n")
     
     # Prepare CSV
-    fieldnames = ["filename", "safebooru_id", "original_width", "original_height"] + ALL_ATTRIBUTE_TAGS
+    fieldnames = ["filename", "safebooru_id", "original_width", "original_height", "raw_tags"] + ALL_ATTRIBUTE_TAGS
     
     # Check for existing progress
     existing_ids = set()
@@ -260,8 +260,6 @@ def scrape(num_images: int, output_dir: str, delay: float = 1.0, workers: int = 
             for row in reader:
                 existing_ids.add(row["safebooru_id"])
         print(f"Found {len(existing_ids)} existing images, resuming...\n")
-        # csv_file = open(metadata_path, "a", newline="")
-        # writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
     else:
         with open(metadata_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -337,7 +335,6 @@ def scrape(num_images: int, output_dir: str, delay: float = 1.0, workers: int = 
     except KeyboardInterrupt:
         print(f"\n\nInterrupted. Saved {downloaded} images so far.")
     finally:
-        csv_file.close()
         pbar.close()
     
     print(f"\nDone! Downloaded {downloaded} images.")
