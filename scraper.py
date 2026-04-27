@@ -8,7 +8,6 @@ Usage:
     python scraper.py --num_images 10000 --output_dir ./raw_images --workers 8
 """
 
-import hashlib
 import os
 import csv
 import time
@@ -187,9 +186,6 @@ def download_single_image(post: dict, output_path: Path) -> dict | None:
     try:
         resp = requests.get(image_url, timeout=30)
         resp.raise_for_status()
-        img_bytes = resp.content
-        img_hash = hashlib.md5(img_bytes).hexdigest()
-
         img = Image.open(BytesIO(resp.content))
         
         # Quality filters
@@ -215,7 +211,6 @@ def download_single_image(post: dict, output_path: Path) -> dict | None:
             "safebooru_id": post_id,
             "original_width": w,
             "original_height": h,
-            "image_md5": img_hash,
             "raw_tags": tag_string
         }
         row.update(attributes)
@@ -265,8 +260,8 @@ def scrape(num_images: int, output_dir: str, delay: float = 1.0, workers: int = 
             for row in reader:
                 existing_ids.add(row["safebooru_id"])
         print(f"Found {len(existing_ids)} existing images, resuming...\n")
-        csv_file = open(metadata_path, "a", newline="")
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        # csv_file = open(metadata_path, "a", newline="")
+        # writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
     else:
         with open(metadata_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
