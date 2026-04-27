@@ -196,7 +196,12 @@ def download_single_image(post: dict, output_path: Path) -> dict | None:
             return None
         
         # Convert and save
-        img = img.convert("RGB")
+        if img.mode in ("P", "RGBA"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[3])
+            img = background
+        else:
+            img = img.convert("RGB")
         img.save(save_path, "PNG")
         
         # Build row
