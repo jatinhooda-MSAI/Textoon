@@ -101,8 +101,8 @@ EXCLUDED_TAGS = [
     "realistic", "photo", "3d", "multiple_views", "blood",
     "horror", "gore", "weapon", "gun", "cigarette", "alcohol",
     "bikini", "swimsuit", "underwear", "lingerie", "nude",
-    "suggestive", "cleavage", "midriff", "miniskirt",
-    "highres",  # just a quality tag, not useful as attribute
+    "suggestive", "cleavage", "midriff", "miniskirt", "thighhighs", 
+    "stockings", "pantyhose", "shorts", "skirt", "dress_up", "nsfw",
 ]
 
 
