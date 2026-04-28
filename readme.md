@@ -8,15 +8,15 @@
 
 A scraper and post-processing pipeline that pulls single-character illustrations from Safebooru, extracts a 135-dimensional attribute vector per image across 11 semantic categories (hair color, expression, accessories, pose, etc.), and produces a clean training set ready for diffusion model training.
 
-**Final dataset:** ~19k images after MD5 + perceptual-hash deduplication, center-cropped and resized to 64×64, with attribute distributions analyzed and underrepresented tags pruned.
+**Final dataset:** ~50k images after MD5 + perceptual-hash deduplication, center-cropped and resized to 128x128, with attribute distributions analyzed and underrepresented tags pruned.
 
 ---
 
 ## Key technical decisions and the reasoning behind them
 
-### Resolution: committed to 64×64
+### Resolution: committed to 128x128
 
-Pixel-space diffusion compute scales quadratically with side length. With <50k training images, 128×128 produces undertrained, blurry samples no matter how long you run. 256×256+ requires either millions of images or a latent-diffusion architecture (autoencoder + diffusion in latent space), which doubles project scope. 64×64 is the honest choice for the data and compute available.
+Pixel-space diffusion compute scales quadratically with side length. With <50k training images, 128×128 tbc.... 256×256+ requires either millions of images or a latent-diffusion architecture (autoencoder + diffusion in latent space), which doubles project scope. 
 
 ### Cropping: center-crop over stretch or pad
 
@@ -54,7 +54,7 @@ The original code held a single CSV file handle open for the entire (multi-hour)
 
 **Fix:** Switched to open-write-close per row inside a `csv_lock`. Adds ~35 seconds total over a 70k-row run versus durability against process death. Trivial cost, real benefit.
 
-### 3. Scraper stopped at 19,461 / 70,000 target
+### 3. Scraper stopped at 50K / 70,000 target
 
 **Diagnosis:** Hit Safebooru's hard pagination cap at page 200 (≈200k posts). The cap is a backend limitation of the Gelbooru-family search index, not a rate limit you can wait out.
 
@@ -86,7 +86,22 @@ With 135 binary attributes and 19k images, several tags had <50 examples while p
 - Merged fine-grained variants where it made sense (`cat_tail` + `dog_tail` + `fox_tail` → `tail`).
 - Flagged 200–500 example attributes as "low-confidence" for separate reporting in the eval phase.
 
-Also computed pairwise correlation between remaining attributes to identify entangled pairs (`wand` ~ `witch_hat`, `wings` ~ `flying`). These get flagged in the disentanglement evaluation as "expected to be entangled given training data co-occurrence" rather than treated as model failures.
+Total images: 48706
+Tags with <1000 examples: 80
+Tags with <500 examples: 65
+Tags with <200 examples: 44
+Tags with <50 examples:  28
+
+Also computed pairwise correlation between remaining attributes to identify entangled pairs. These get flagged in the disentanglement evaluation as "expected to be entangled given training data co-occurrence" rather than treated as model failures.
+animal_ears                    ~ cat_ears                      : r=+0.46
+animal_ears                    ~ tail                          : r=+0.47
+cat_ears                       ~ cat_tail                      : r=+0.61
+dog_ears                       ~ dog_tail                      : r=+0.65
+fox_ears                       ~ fox_tail                      : r=+0.64
+tail                           ~ cat_tail                      : r=+0.44
+long_hair                      ~ short_hair                    : r=-0.58
+backpack                       ~ bag                           : r=+0.55
+outdoors                       ~ sky                           : r=+0.46
 
 ### 6. Train/val split needed stratification
 
