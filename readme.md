@@ -117,3 +117,54 @@ Random 95/5 split left rare attributes with <10 validation examples — making t
 **Judgment:** Distinguishing content vs metadata filters, recognizing when a target dataset size isn't worth the marginal effort, identifying which preprocessing decisions affect model behavior (resolution, cropping, conditioning) versus which are cosmetic.
 
 **Debugging:** Diagnosing schema drift from "Unnamed: N" symptoms, identifying pagination caps from termination patterns, distinguishing transient API errors from end-of-results signals.
+
+
+---
+
+# Appendix: Deduplication and Concurrency
+
+After scraping, two cleanup passes ran on the dataset: exact-duplicate detection via MD5 and near-duplicate detection via perceptual hash (pHash). Both involved choices about concurrency that turned out to be non-obvious.
+
+## Concurrency: matching the model to the workload
+
+**MD5 hashing is I/O-bound.** Reading the file dominates; the hash itself is microseconds. Threads work well here — the GIL releases during disk reads, so a `ThreadPoolExecutor` with 16 workers gives near-linear speedup with no setup cost. For 19k files, ~30 seconds.
+
+**pHash is mixed I/O and CPU.** PIL decodes the PNG (releases GIL — parallelizes), then the resize + DCT + binarize pipeline runs in pure Python and holds the GIL. Threading still helps (~4–6x) because PNG decode is a meaningful chunk of work, but it doesn't fully utilize cores. For true parallelism, `ProcessPoolExecutor` with workers equal to `cpu_count() - 1` runs each pHash on its own core and finishes ~2x faster than threading.
+
+**Lesson:** "Make it concurrent" isn't a single decision. Threads for I/O-bound, processes for CPU-bound, neither for tasks that finish in seconds anyway. For a 19k-file one-shot job, threading was the right call — process pools added complexity (worker functions must live in `.py` files for pickling, notebook cells don't work) for marginal gain.
+
+## Notebook-specific gotchas
+
+`multiprocessing.Pool` and `ProcessPoolExecutor` need worker functions to be importable. Functions defined in notebook cells aren't — they live in kernel memory, not on disk. Workers spawn, fail to import, and the notebook either errors with `AttributeError: Can't get attribute` or silently hangs. Fix: move worker functions to a `.py` file next to the notebook.
+
+Threading has no such issue and works identically in scripts and notebooks. Another reason to default to threads when the workload allows.
+
+## Two-stage dedup: inspect, then act
+
+Built `view_duplicates(df, hash_col, img_dir)` and `remove_duplicates(df, hash_col, img_dir)` as separate functions. `view` finds groups, prints filenames, and renders a few groups inline with matplotlib for visual confirmation. `remove` does the actual deletion, with a `dry_run` flag for one more safety check.
+
+Same functions handle both MD5 and pHash by parameterizing the column name — no copy-paste between dedup passes.
+
+The pattern matters: any operation that deletes data from disk should be split into a "show me what would happen" call and a "do it" call. Not because the dedup logic is wrong, but because seeing the actual files being merged catches edge cases (e.g., are these really duplicates, or just visually similar characters?) that the metric alone misses.
+
+## Pass order matters
+
+Run MD5 first, then pHash. MD5 matches are a strict subset of pHash matches (byte-identical files have identical pHashes), so MD5 eliminates the easy cases in O(n). pHash handles the structural near-duplicates afterward on the smaller surviving set.
+
+For pHash, sort by resolution descending before deduping with `keep="first"` — that way when two near-duplicates are found, the higher-resolution copy survives. Doesn't matter for MD5 (byte-identical means same resolution).
+
+## Hamming-distance pHash dedup: considered, deferred
+
+Exact-match pHash catches duplicates whose 64-bit fingerprints are identical. Hamming distance ≤ 5 catches additional near-duplicates that differ by a few bits (cropped versions, color edits). Skipped for this project: the marginal gain on a 19k-image set isn't worth the O(n²) comparison cost or the false-positive risk (two distinct characters in similar poses can land within 5 bits). Worth revisiting if memorization shows up in trained samples.
+
+## Minor lessons
+
+- `tqdm.notebook` requires `ipywidgets`. Plain `from tqdm import tqdm` works everywhere and avoids one dependency.
+- `ex.map` with `chunksize=32–64` is the right default for short tasks across processes — without chunking, IPC overhead dominates.
+- When using process pools, sanity-check parallelism is real: open a system monitor and confirm multiple Python processes are pinning cores. If only one is, the worker function isn't being parallelized correctly.
+
+## Skills demonstrated (additions)
+
+**Concurrency:** Distinguishing I/O-bound from CPU-bound workloads, choosing between threading and multiprocessing accordingly, understanding GIL behavior under different operations, diagnosing notebook-specific multiprocessing failures.
+
+**Defensive design:** Two-stage destructive operations (inspect → confirm → act), parameterized utility functions to avoid duplication across similar passes, ordering operations by cost (cheap exact matches before expensive fuzzy ones).
