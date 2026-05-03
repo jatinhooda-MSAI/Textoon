@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
-BASE = Path("/projects/e32706/kij6504/")
+BASE = Path("./")
 RAW = BASE / "images_128_raw"
 H5 = BASE / "data_128.h5"
 
