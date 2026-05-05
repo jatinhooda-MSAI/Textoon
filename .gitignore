@@ -8,5 +8,5 @@
 *.zip
 *.h5
 !diffusion/overfit_out/*
-!diffusion/evals/*
+!diffusion/eval/*
 !diffusion/runs/run_64/samples/*
