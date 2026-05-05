@@ -9,4 +9,4 @@
 *.h5
 !diffusion/overfit_out/*
 !diffusion/evals/*
-!diffusion/samples/*
+!diffusion/runs/run_64/samples/*
