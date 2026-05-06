@@ -127,7 +127,7 @@ class AttrGaussianDiffusion(GaussianDiffusion):
 
 
 def build_model(num_attrs=91, image_size=64):
-    print(644444444444444)
+    print('128888888888888')
     unet = AttrConditionedUnet(
         num_attrs=num_attrs,
         cfg_dropout_prob=0.1,

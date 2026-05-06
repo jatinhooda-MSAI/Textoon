@@ -10,3 +10,5 @@
 !diffusion/overfit_out/*
 !diffusion/eval/*
 !diffusion/runs/run_64/samples/*
+!diffusion128/eval/*
+!diffusion128/runs/run_128/samples/*
