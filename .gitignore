@@ -7,6 +7,7 @@
 **/*.svg
 *.zip
 *.h5
+*.pt
 !diffusion/overfit_out/*
 !diffusion/runs/run_64/eval/*
 !diffusion/runs/run_64/samples/*

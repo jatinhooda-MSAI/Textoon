@@ -1,185 +1,135 @@
-# Data Pipeline for Conditional DDPM — Engineering Notes
+# TEXTOON 
+## Attribute-Conditioned Character Generation
 
-**Project context:** Building a conditional denoising diffusion model from scratch to generate kid-friendly cartoon characters from multi-hot attribute vectors. This document covers the data acquisition and preprocessing phase — the unglamorous but consequential 80% of the work.
+A conditional Denoising Diffusion Probabilistic Model (DDPM) that generates
+anime characters from a 91-dimensional multi-hot attribute vector. Trained
+on ~46k Safebooru images at both 64×64 and 128×128 resolution with classifier-free
+guidance.
 
----
+## Results
 
-## What I built
+The project trained two models: an initial 64×64 baseline (400k steps) and a
+final 128×128 model (150k steps) trained at higher resolution after observing
+that some attributes the 64 model could not control were limited by pixel
+footprint, and also because 128 just more cool.
 
-A scraper and post-processing pipeline that pulls single-character illustrations from Safebooru, extracts a 135-dimensional attribute vector per image across 11 semantic categories (hair color, expression, accessories, pose, etc.), and produces a clean training set ready for diffusion model training.
+![64 vs 128 comparison](runs/comparison_64_vs_128.png)
 
-**Final dataset:** ~50k images after MD5 + perceptual-hash deduplication, center-cropped and resized to 128x128, with attribute distributions analyzed and underrepresented tags pruned.
+*Top row (4 pairs): 64×64 outputs upsampled to 128×128 for display. Bottom row:
+native 128×128 outputs. Same attribute toggles, same random seeds, same model
+family, only resolution differs. Attributes that toggle ambiguously at 64
+(mouth state, hair styling) become clearly controllable at 128.*
 
----
+![128 toggle grid](runs/run_128/eval/toggle_grid.png)
 
-## Key technical decisions and the reasoning behind them
+*Final 128×128 model: attribute toggling under fixed noise. Each row toggles
+one attribute OFF (left) / ON (right) for 4 different characters.*
 
-### Resolution: committed to 128x128
+![128 samples](runs/run_128/samples/step_150000.png)
 
-Pixel-space diffusion compute scales quadratically with side length. With <50k training images, 128×128 tbc.... 256×256+ requires either millions of images or a latent-diffusion architecture (autoencoder + diffusion in latent space), which doubles project scope. 
+*8 samples from the EMA model conditioned on attribute vectors drawn from
+training images.*
 
-### Cropping: center-crop over stretch or pad
+![128 interpolation](runs/run_128/eval/interpolation.png)
 
-Diffusion U-Nets require fixed-size square inputs. Three options exist:
-- **Stretch:** distorts geometry; the model learns to generate distorted characters.
-- **Pad-to-square:** wastes pixels on bars and forces the model to learn the bar pattern.
-- **Center-crop:** preserves geometry, uses every pixel for content. Combined with an aspect-ratio filter (max 2.0), losses to off-center subjects are bounded.
+*Noisespace interpolation with attributes held fixed. Conditioning is preserved
+across the full noise trajectory.*
 
-Used Lanczos resampling (not bilinear) for the final downsample — sharper edges with no extra cost.
+## The 64 → 128 Journey
 
-### Conditioning mechanism: AdaGN concat over cross-attention
+The project initially shipped a 64×64 model on the (correct) reasoning that
+48k images is light for pixelspace diffusion at higher resolution. Evaluation
+on the 64 model revealed that some attributes (hair color, blush, hats) toggled
+cleanly, while others (mouth state, hair styling) only partially worked.
 
-A 135-dim multi-hot vector has no sequential or spatial structure. Cross-attention's strength is conditioning on structured inputs (token sequences, spatial maps). For fixed-length attribute vectors, projecting through an MLP and concatenating with the timestep embedding (fed via adaptive group normalization) is sufficient and avoids unnecessary parameters.
+The hypothesis was that attributes failing at 64 were limited by pixel footprint,
+a smile occupies maybe 30 pixels at 64×64 vs 120 at 128×128. Doubling resolution
+should help shapebased attributes while keeping colorbased attributes same.
 
----
+The 128 model confirmed this: every attribute that worked at 64 still works at
+128, and several that were ambiguous at 64 are now very clear.
 
-## Problems hit and how I resolved them
+## Architecture
 
-### 1. CSV schema drift between scraper runs
+ UNet (~18M params) from `denoisingdiffusionpytorch`, subclassed to inject
+  attribute conditioning.
+ 91dim attribute vector → 2layer MLP → added to time embedding before AdaGN
+  injection in residual blocks.
+ Classifierfree guidance: 10% attribute dropout during training; guidance
+  scale 5.0 at sampling.
+ Cosine noise schedule, 1000 timesteps, ε prediction objective.
+  EMA of model weights (decay 0.9999, warmup at step 1000); samples drawn from EMA.
 
-**Symptom:** After expanding the attribute tag list mid-project, `metadata.csv` had the old narrow header (~70 columns) but new rows trying to write 139 fields. Pandas loaded the file with "Unnamed: N" columns for everything past the original header.
+| Run | Resolution | Steps | Batch | Wall time | Samples used |
+|-----------|---------|------|-----|--------------|----------|
+| `run_64`  | 64×64   | 400k | 256 | ~11h on H100 | baseline |
+| `run_128` | 128×128 | 150k | 128 | ~17h on H100 | final    |
 
-**Root cause:** The resume logic opened the CSV in append mode without validating the existing header against the current schema.
+Optimizer: AdamW lr=2e-4 (cosine decay), bfloat16 mixed precision, flash attention.
 
-**Fix:** Added a schema-version guard that compares the existing CSV header against the current `fieldnames` at startup and raises if they differ. Cheap insurance against silent data corruption when the schema evolves.
+## Installation
 
-```python
-if existing_header != fieldnames:
-    raise RuntimeError(f"Schema mismatch: {len(existing_header)} vs {len(fieldnames)}")
+```bash
+git clone <repo>
+cd <repo>
+conda create -n ddpm python=3.11 -y
+conda activate ddpm
+pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
 ```
 
-### 2. Long-running file handle risked data loss on dirty exit
+## Run
 
-The original code held a single CSV file handle open for the entire (multi-hour) run with `flush()` after each write. `flush()` only pushes to the OS buffer — a hard kill (OOM, network loss, machine reboot) could still drop buffered rows or leave a half-written final line.
+The dataset is not bundled (~2.4GB at 128×128). The acquisition pipeline is in
+`scraper.py` + `prep_data.py`; output is one HDF5 file plus a metadata CSV.
 
-**Fix:** Switched to open-write-close per row inside a `csv_lock`. Adds ~35 seconds total over a 70k-row run versus durability against process death. Trivial cost, real benefit.
+```bash
+# 1. Scrape and prep
+python scraper.py
+python prep_data.py --base_dir <path>      # 64×64 HDF5
+python prep_128.py --base_dir <path>       # 128×128 HDF5
 
-### 3. Scraper stopped at 50K / 70,000 target
+# 2. Train/val split
+python make_split.py
 
-**Diagnosis:** Hit Safebooru's hard pagination cap at page 200 (≈200k posts). The cap is a backend limitation of the Gelbooru-family search index, not a rate limit you can wait out.
+# 3. Train (Slurm wrappers in train.sbatch / train_128.sbatch)
+python train.py        # 64×64
+python train_128.py    # 128×128
 
-**Compounded by:** A `-highres` exclusion filter that was systematically removing the most polished, popular images on the site. `highres` is a metadata tag for files above ~1600×1200 — exactly the images that downsample best to 64×64. I had originally added the filter thinking about download bandwidth; it was the wrong tool for that goal and was costing significant yield.
+# 4. Evaluate
+python eval_toggle.py        # or eval_toggle_128.py
+python eval_interp.py        # or eval_interp_128.py
+python eval_compare.py       # side-by-side comparison
+```
 
-**Fix:**
-- Removed `-highres` (kept content-based exclusions like `-nude`, `-blood`, `-weapon`).
-- Loosened `min_attrs` from 5 to 4 — fewer richly-tagged images excluded, attribute signal still strong enough.
-- Added `-4koma` to better catch multi-panel content that wasn't getting filtered by `-comic` alone.
+## Extra Criteria
 
-**Lesson:** Distinguish content filters (worth the yield cost) from quality/metadata filters (need scrutiny). A negative tag's name doesn't tell you what it actually filters.
+**Latent Space Exploration.** Implemented two latent-space experiments:
 
-### 4. Deduplication needed two passes, not one
+- **Attribute toggling:** Hold input noise fixed, toggle individual attributes
+  on/off, measure visual disentanglement.
+- **Noise interpolation:** Hold attributes fixed, interpolate noise between two
+  seeds across 8 frames, assess latent continuity.
 
-MD5 hashing only catches byte-identical files. Same image re-saved at different JPEG quality, with a watermark, or as a different file format produces a different MD5 — but is functionally a duplicate for training purposes.
-
-**Fix:** Two-stage dedup:
-- **MD5 hash** (fast, exact): catches literal reposts. Removed ~2%.
-- **Perceptual hash (pHash)** (slower, structural): grayscales → resizes to 32×32 → DCT → keeps low-frequency 8×8 block → binarizes against median → 64-bit fingerprint. Catches re-encodings, watermarks, minor edits. Removed another ~5%.
-
-Did both as post-processing scripts on the downloaded files rather than inline during scraping — cleaner separation, easier to debug, can be rerun independently.
-
-### 5. Attribute distribution was severely long-tailed
-
-With 135 binary attributes and 19k images, several tags had <50 examples while popular ones had thousands. Training conditioning on the rare ones would produce noise; the eval classifier would have no signal to score them on.
-
-**Fix:** Computed per-attribute frequency counts, then:
-- Dropped attributes with <200 examples entirely from the conditioning vector.
-- Merged fine-grained variants where it made sense (`cat_tail` + `dog_tail` + `fox_tail` → `tail`).
-- Flagged 200–500 example attributes as "low-confidence" for separate reporting in the eval phase.
-
-Total images: 48706
-Tags with <1000 examples: 80
-Tags with <500 examples: 65
-Tags with <200 examples: 44
-Tags with <50 examples:  28
-
-Also computed pairwise correlation between remaining attributes to identify entangled pairs. These get flagged in the disentanglement evaluation as "expected to be entangled given training data co-occurrence" rather than treated as model failures.
-animal_ears                    ~ cat_ears                      : r=+0.46
-animal_ears                    ~ tail                          : r=+0.47
-cat_ears                       ~ cat_tail                      : r=+0.61
-dog_ears                       ~ dog_tail                      : r=+0.65
-fox_ears                       ~ fox_tail                      : r=+0.64
-tail                           ~ cat_tail                      : r=+0.44
-long_hair                      ~ short_hair                    : r=-0.58
-backpack                       ~ bag                           : r=+0.55
-outdoors                       ~ sky                           : r=+0.46
-
-### 6. Train/val split needed stratification
-
-Random 95/5 split left rare attributes with <10 validation examples — making the eval classifier's reported accuracy on those tags noisy enough to be meaningless.
-
-**Fix:** Iterative stratified splitting (multilabel-aware) to ensure every attribute has a reasonable val-set count. Alternative for simpler cases: spot-check the random split and rerun with a different seed if rare attributes get unlucky.
-
----
-
-## What I'd do differently next time
-
-1. **Schema validation on day one.** The CSV schema bug cost an evening of confusion. Five lines of validation code at the start would have caught it immediately. This is now my default for any pipeline that writes structured output across runs.
-
-2. **Pull from multiple narrow queries instead of one broad one.** Safebooru's pagination cap is per-query. Running `solo cat_ears`, `solo dragon`, `solo magical_girl` separately and deduping the union sidesteps the page-200 wall entirely. Would have hit the 70k target without compromising filter quality.
-
-3. **Resize on save with original kept separately.** Storing 70k full-resolution PNGs is 100+ GB. Storing them at 512×512 cap is ~5 GB and gives flexibility to experiment with 128×128 later without rescraping.
-
-4. **Treat data acquisition as iterative.** First run with conservative filters and small target; analyze the distribution; adjust filters; run again. I conflated "scrape" and "scrape *correctly*" — they're different problems.
-
----
-
-## Skills demonstrated
-
-**Engineering:** Multithreaded scraping with thread-safe state, resumable long-running pipelines, schema versioning, robust file I/O patterns under concurrency.
-
-**ML data pipeline:** Multi-stage deduplication (byte-level + perceptual), attribute distribution analysis, stratified multilabel splitting, co-occurrence analysis for downstream evaluation design.
-
-**Judgment:** Distinguishing content vs metadata filters, recognizing when a target dataset size isn't worth the marginal effort, identifying which preprocessing decisions affect model behavior (resolution, cropping, conditioning) versus which are cosmetic.
-
-**Debugging:** Diagnosing schema drift from "Unnamed: N" symptoms, identifying pagination caps from termination patterns, distinguishing transient API errors from end-of-results signals.
+Findings hold across both resolutions: conditioning is preserved under
+noise interpolation; toggle disentanglement is partial and improves with
+resolution.
 
 
----
+## Repository Structure
 
-# Appendix: Deduplication and Concurrency
-
-After scraping, two cleanup passes ran on the dataset: exact-duplicate detection via MD5 and near-duplicate detection via perceptual hash (pHash). Both involved choices about concurrency that turned out to be non-obvious.
-
-## Concurrency: matching the model to the workload
-
-**MD5 hashing is I/O-bound.** Reading the file dominates; the hash itself is microseconds. Threads work well here — the GIL releases during disk reads, so a `ThreadPoolExecutor` with 16 workers gives near-linear speedup with no setup cost. For 19k files, ~30 seconds.
-
-**pHash is mixed I/O and CPU.** PIL decodes the PNG (releases GIL — parallelizes), then the resize + DCT + binarize pipeline runs in pure Python and holds the GIL. Threading still helps (~4–6x) because PNG decode is a meaningful chunk of work, but it doesn't fully utilize cores. For true parallelism, `ProcessPoolExecutor` with workers equal to `cpu_count() - 1` runs each pHash on its own core and finishes ~2x faster than threading.
-
-**Lesson:** "Make it concurrent" isn't a single decision. Threads for I/O-bound, processes for CPU-bound, neither for tasks that finish in seconds anyway. For a 19k-file one-shot job, threading was the right call — process pools added complexity (worker functions must live in `.py` files for pickling, notebook cells don't work) for marginal gain.
-
-## Notebook-specific gotchas
-
-`multiprocessing.Pool` and `ProcessPoolExecutor` need worker functions to be importable. Functions defined in notebook cells aren't — they live in kernel memory, not on disk. Workers spawn, fail to import, and the notebook either errors with `AttributeError: Can't get attribute` or silently hangs. Fix: move worker functions to a `.py` file next to the notebook.
-
-Threading has no such issue and works identically in scripts and notebooks. Another reason to default to threads when the workload allows.
-
-## Two-stage dedup: inspect, then act
-
-Built `view_duplicates(df, hash_col, img_dir)` and `remove_duplicates(df, hash_col, img_dir)` as separate functions. `view` finds groups, prints filenames, and renders a few groups inline with matplotlib for visual confirmation. `remove` does the actual deletion, with a `dry_run` flag for one more safety check.
-
-Same functions handle both MD5 and pHash by parameterizing the column name — no copy-paste between dedup passes.
-
-The pattern matters: any operation that deletes data from disk should be split into a "show me what would happen" call and a "do it" call. Not because the dedup logic is wrong, but because seeing the actual files being merged catches edge cases (e.g., are these really duplicates, or just visually similar characters?) that the metric alone misses.
-
-## Pass order matters
-
-Run MD5 first, then pHash. MD5 matches are a strict subset of pHash matches (byte-identical files have identical pHashes), so MD5 eliminates the easy cases in O(n). pHash handles the structural near-duplicates afterward on the smaller surviving set.
-
-For pHash, sort by resolution descending before deduping with `keep="first"` — that way when two near-duplicates are found, the higher-resolution copy survives. Doesn't matter for MD5 (byte-identical means same resolution).
-
-## Hamming-distance pHash dedup: considered, deferred
-
-Exact-match pHash catches duplicates whose 64-bit fingerprints are identical. Hamming distance ≤ 5 catches additional near-duplicates that differ by a few bits (cropped versions, color edits). Skipped for this project: the marginal gain on a 19k-image set isn't worth the O(n²) comparison cost or the false-positive risk (two distinct characters in similar poses can land within 5 bits). Worth revisiting if memorization shows up in trained samples.
-
-## Minor lessons
-
-- `tqdm.notebook` requires `ipywidgets`. Plain `from tqdm import tqdm` works everywhere and avoids one dependency.
-- `ex.map` with `chunksize=32–64` is the right default for short tasks across processes — without chunking, IPC overhead dominates.
-- When using process pools, sanity-check parallelism is real: open a system monitor and confirm multiple Python processes are pinning cores. If only one is, the worker function isn't being parallelized correctly.
-
-## Skills demonstrated (additions)
-
-**Concurrency:** Distinguishing I/O-bound from CPU-bound workloads, choosing between threading and multiprocessing accordingly, understanding GIL behavior under different operations, diagnosing notebook-specific multiprocessing failures.
-
-**Defensive design:** Two-stage destructive operations (inspect → confirm → act), parameterized utility functions to avoid duplication across similar passes, ordering operations by cost (cheap exact matches before expensive fuzzy ones).
+```
+.
+├── scraper.py              # Safebooru scraper (multi-threaded, deduplicated)
+├── prep_data.py            # 64×64 HDF5
+├── prep_128.py             # 128×128 HDF5
+├── dataset.py              # PyTorch Dataset (HDF5-backed, lazy worker init)
+├── make_split.py           # Stratified 95/5 train/val split
+├── model.py                # AttrConditionedUnet + AttrGaussianDiffusion + CFG sampler
+├── train.py / train_128.py # Training loops
+├── train.sbatch            # Slurm submission scripts
+├── eval_toggle*.py         # Attribute toggling experiment
+├── eval_interp*.py         # Noise interpolation experiment
+├── eval_compare.py         # 64 vs 128 side-by-side
+└── runs/{run_64,run_128}/  # Checkpoints, sample grids, eval outputs
+```
