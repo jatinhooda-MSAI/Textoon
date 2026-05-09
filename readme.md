@@ -6,49 +6,6 @@ anime characters from a 91-dimensional multi-hot attribute vector. Trained
 on ~46k Safebooru images at both 64×64 and 128×128 resolution with classifier-free
 guidance.
 
-## Results
-
-The project trained two models: an initial 64×64 baseline (400k steps) and a
-final 128×128 model (150k steps) trained at higher resolution after observing
-that some attributes the 64 model could not control were limited by pixel
-footprint, and also because 128 just more cool.
-
-![64 vs 128 comparison](runs/comparison_64_vs_128.png)
-
-*Top row (4 pairs): 64×64 outputs upsampled to 128×128 for display. Bottom row:
-native 128×128 outputs. Same attribute toggles, same random seeds, same model
-family, only resolution differs. Attributes that toggle ambiguously at 64
-(mouth state, hair styling) become clearly controllable at 128.*
-
-![128 toggle grid](runs/run_128/eval/toggle_grid.png)
-
-*Final 128×128 model: attribute toggling under fixed noise. Each row toggles
-one attribute OFF (left) / ON (right) for 4 different characters.*
-
-![128 samples](runs/run_128/samples/step_150000.png)
-
-*8 samples from the EMA model conditioned on attribute vectors drawn from
-training images.*
-
-![128 interpolation](runs/run_128/eval/interpolation.png)
-
-*Noisespace interpolation with attributes held fixed. Conditioning is preserved
-across the full noise trajectory.*
-
-## The 64 → 128 Journey
-
-The project initially shipped a 64×64 model on the (correct) reasoning that
-48k images is light for pixelspace diffusion at higher resolution. Evaluation
-on the 64 model revealed that some attributes (hair color, blush, hats) toggled
-cleanly, while others (mouth state, hair styling) only partially worked.
-
-The hypothesis was that attributes failing at 64 were limited by pixel footprint,
-a smile occupies maybe 30 pixels at 64×64 vs 120 at 128×128. Doubling resolution
-should help shapebased attributes while keeping colorbased attributes same.
-
-The 128 model confirmed this: every attribute that worked at 64 still works at
-128, and several that were ambiguous at 64 are now very clear.
-
 ## Architecture
 
  UNet (~18M params) from `denoisingdiffusionpytorch`, subclassed to inject
@@ -63,9 +20,53 @@ The 128 model confirmed this: every attribute that worked at 64 still works at
 | Run | Resolution | Steps | Batch | Wall time | Samples used |
 |-----------|---------|------|-----|--------------|----------|
 | `run_64`  | 64×64   | 400k | 256 | ~11h on H100 | baseline |
-| `run_128` | 128×128 | 150k | 128 | ~17h on H100 | final    |
+| `run_128` | 128×128 | 150k | 64  | ~17h on H100 | final    |
 
-Optimizer: AdamW lr=2e-4 (cosine decay), bfloat16 mixed precision, flash attention.
+Optimizer: AdamW lr=2e-4 (cosine decay), bfloat16 mixed precision.
+
+## Results
+
+The project trained two models: an initial 64×64 baseline (400k steps) and a
+final 128×128 model (150k steps) trained at higher resolution after observing
+that some attributes the 64 model could not control were limited by pixel
+footprint, and also because 128 is just more cool.
+
+*128x128 Training Samples:*
+![Step 5K](diffusion128/runs/run_128/samples/step_005000.png)
+![Step 30K](diffusion128/runs/run_128/samples/step_030000.png)
+![Step 60K](diffusion128/runs/run_128/samples/step_060000.png)
+![Step 100K](diffusion128/runs/run_128/samples/step_100000.png)
+![Step 150K](diffusion128/runs/run_128/samples/step_150000.png)
+
+
+*Final 128×128 model: attribute toggling under fixed noise. Each image toggles
+one attribute OFF (left) / ON (right) for 4 different characters.*
+![Blonde Hair](diffusion128/runs/run_128/eval/toggle_blonde_hair.png)
+![Blush](diffusion128/runs/run_128/eval/toggle_blush.png)
+![Open Mouth](diffusion128/runs/run_128/eval/toggle_open_mouth.png)
+![Twin Tails (pony?)](diffusion128/runs/run_128/eval/toggle_twintails.png)
+
+
+*Noisespace interpolation with attributes held fixed. Conditioning is preserved
+across the full noise trajectory. The following attributes fixed over the noise cycle- 
+["1girl", "long_hair", "blonde_hair", "smile", "blue_eyes"]:*
+
+![Noise Interpolation](diffusion128/runs/run_128/eval/interpolation.png)
+
+## The 64 to 128 Journey
+
+The project initially shipped a 64×64 model on the (correct) reasoning that
+48k images is light for pixelspace diffusion at higher resolution. Evaluation
+on the 64 model revealed that some large attributes (ex. hair color) toggled
+well, while others (ex. mouth state) only partially worked.
+
+The hypothesis is that attributes failing at 64 were limited by pixel footprint,
+a smile occupies maybe 30 pixels at 64×64 vs 120 at 128×128. Doubling resolution
+should help shapebased attributes while keeping colorbased attributes same.
+
+The 128 model seems to suggest this: every attribute that worked at 64 still works at
+128, and several that were ambiguous at 64 are now very clear.
+
 
 ## Installation
 
