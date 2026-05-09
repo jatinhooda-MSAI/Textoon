@@ -32,15 +32,18 @@ that some attributes the 64 model could not control were limited by pixel
 footprint, and also because 128 is just more cool.
 
 *128x128 Training Samples:*
-![Step 5K](diffusion128/runs/run_128/samples/step_005000.png) Step 5K
-![Step 30K](diffusion128/runs/run_128/samples/step_030000.png) Step 30K
-![Step 60K](diffusion128/runs/run_128/samples/step_060000.png) Step 60K
-![Step 100K](diffusion128/runs/run_128/samples/step_100000.png) Step 100K
-![Step 150K](diffusion128/runs/run_128/samples/step_150000.png) Step 150K
+
+Step 5K
+![Step 5K](diffusion128/runs/run_128/samples/step_005000.png) Step 30K
+![Step 30K](diffusion128/runs/run_128/samples/step_030000.png) Step 60K
+![Step 60K](diffusion128/runs/run_128/samples/step_060000.png) Step 100K
+![Step 100K](diffusion128/runs/run_128/samples/step_100000.png) Step 150K
+![Step 150K](diffusion128/runs/run_128/samples/step_150000.png) 
 
 
 *Final 128×128 model: attribute toggling under fixed noise. Each image toggles
 one attribute OFF (left) / ON (right) for 4 different characters.*
+
 Blonde Hair:
 ![Blonde Hair](diffusion128/runs/run_128/eval/toggle_blonde_hair.png)
 Blush:
